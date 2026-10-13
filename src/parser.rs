@@ -62,7 +62,11 @@ pub fn try_parse_response<const N: usize>(
         builder = builder.header(h.name, h.value);
     }
 
-    let response = builder.body(()).expect("a valid response");
+    // A head httparse accepts can still be one `http` refuses (a header name
+    // longer than it holds); that is a parse failure, not a panic.
+    let response = builder
+        .body(())
+        .map_err(|e| Error::HttpParseFail(e.to_string()))?;
 
     Ok(Some((input_used, response)))
 }
@@ -128,7 +132,11 @@ pub fn try_parse_partial_response<const N: usize>(
         builder = builder.header(h.name, h.value);
     }
 
-    let response = builder.body(()).expect("a valid response");
+    // A head httparse accepts can still be one `http` refuses (a header name
+    // longer than it holds); that is a parse failure, not a panic.
+    let response = builder
+        .body(())
+        .map_err(|e| Error::HttpParseFail(e.to_string()))?;
 
     Ok(Some(response))
 }
@@ -205,6 +213,7 @@ pub fn try_parse_request<const N: usize>(
 #[cfg(test)]
 mod test {
     use crate::parser::{try_parse_partial_response, try_parse_request, try_parse_response};
+    use crate::Error;
 
     #[test]
     fn ensure_no_half_response() {
@@ -254,5 +263,19 @@ mod test {
             .expect("parse ok")
             .expect("complete");
         assert_eq!(res.status().as_u16(), 999);
+    }
+
+    #[test]
+    fn header_name_longer_than_http_holds_is_a_parse_error() {
+        let name = "X".repeat(65_536);
+        let input = format!("HTTP/1.1 200 OK\r\n{name}: v\r\n\r\n");
+        let err = try_parse_response::<10>(input.as_bytes()).unwrap_err();
+        assert!(matches!(err, Error::HttpParseFail(_)), "{err:?}");
+        let err = try_parse_partial_response::<10>(input.as_bytes()).unwrap_err();
+        assert!(matches!(err, Error::HttpParseFail(_)), "{err:?}");
+        // The longest name `http` holds still parses.
+        let name = "X".repeat(65_535);
+        let input = format!("HTTP/1.1 200 OK\r\n{name}: v\r\n\r\n");
+        assert!(try_parse_response::<10>(input.as_bytes()).unwrap().is_some());
     }
 }
